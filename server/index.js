@@ -37,6 +37,22 @@ app.get('/', (req, res) => {
   res.send('Server is running correctly. Time: ' + new Date().toISOString());
 });
 
+// Temporary endpoint to seed admin user (REMOVE IN PRODUCTION)
+app.post('/api/seed-admin', async (req, res) => {
+  try {
+    const hashedPassword = await bcrypt.hash('admin123', 10);
+    db.run("INSERT OR REPLACE INTO users (id, username, password, role) VALUES (?, ?, ?, ?)",
+      [1, 'admin', hashedPassword, 'admin'],
+      function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ message: 'Admin user created successfully', userId: this.lastID });
+      }
+    );
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Ensure uploads directory exists
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
