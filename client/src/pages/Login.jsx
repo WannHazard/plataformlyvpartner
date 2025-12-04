@@ -15,27 +15,12 @@ function Login() {
         try {
             const res = await axios.post(`${import.meta.env.VITE_SERVER_URL}/api/login`, { username, password });
             localStorage.setItem('user', JSON.stringify(res.data));
-            if (res.data.role === 'admin') {
-                navigate('/manager');
-            } else {
-                navigate('/worker');
-            }
-        } catch (err) {
-            alert('Login failed: ' + (err.response?.data?.error || err.message));
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    return (
-        <div style={{
-            minHeight: '100vh',
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            justifyContent: 'center',
-            background: 'var(--bg-main)',
-            padding: '20px'
+                alignItems: 'center',
+                    justifyContent: 'center',
+                        justifyContent: 'center',
+                            background: 'var(--bg-main)',
+                                padding: '20px'
         }}>
             <div className="card fade-in" style={{
                 maxWidth: '420px',
@@ -110,7 +95,7 @@ function Login() {
                     <p>👷 Worker: <strong>worker</strong> / <strong>worker123</strong></p>
                 </div>
             </div>
-        </div>
+        </div >
     );
 }
 
