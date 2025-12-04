@@ -243,3 +243,99 @@ tbody tr:last-child td {
 .slide-in {
   animation: slideIn 0.3s ease;
 }
+
+/* Responsive Design for Mobile */
+@media (max-width: 768px) {
+  /* General card adjustments */
+  .card {
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+
+  /* Tables become horizontally scrollable */
+  table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  th, td {
+    padding: 10px;
+    font-size: 12px;
+  }
+
+  /* Buttons stack vertically on small screens */
+  .btn {
+    width: 100%;
+    justify-content: center;
+    padding: 10px 16px;
+    font-size: 13px;
+  }
+
+  /* Tabs wrap and are smaller */
+  .tabs {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .tab {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
+  /* Grid layouts become single column */
+  [style*="display: grid"][style*="gridTemplateColumns"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Forms stack vertically */
+  form[style*="gridTemplateColumns"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Reduce font sizes */
+  h1 {
+    font-size: 20px;
+  }
+
+  h2 {
+    font-size: 18px;
+  }
+
+  h3 {
+    font-size: 16px;
+  }
+
+  h4 {
+    font-size: 14px;
+  }
+
+  /* Header adjustments */
+  [style*="primary-gradient"][style*="flex"]{
+    flex-direction: column;
+    align-items: flex-start !important;
+    gap: 12px;
+  }
+}
+
+/* Extra small devices */
+@media (max-width: 480px) {
+  body {
+    font-size: 14px;
+  }
+
+  .card {
+    padding: 12px;
+  }
+
+  th, td {
+    padding: 8px;
+    font-size: 11px;
+  }
+
+  .btn {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+}

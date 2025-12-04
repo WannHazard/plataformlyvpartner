@@ -340,7 +340,7 @@ function ManagerDashboard() {
                                                     <th>Entrada</th>
                                                     <th>Salida</th>
                                                     <th>Horas</th>
-                                                    <th>Reporte</th>
+                                                    <th>Reporte / Foto</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -356,7 +356,22 @@ function ManagerDashboard() {
                                                             <td>{log.clock_out_time ? new Date(log.clock_out_time).toLocaleString() : '🔴 En turno'}</td>
                                                             <td><strong>{calculateDuration(log.clock_in_time, log.clock_out_time)}</strong></td>
                                                             <td>
-                                                                {log.photo_path && <a href={`${import.meta.env.VITE_SERVER_URL}${log.photo_path}`} target="_blank" rel="noopener noreferrer">📷 Ver</a>}
+                                                                {log.report_text && (
+                                                                    <div style={{
+                                                                        marginBottom: log.photo_path ? '8px' : '0',
+                                                                        fontSize: '13px',
+                                                                        padding: '6px 10px',
+                                                                        background: 'rgba(102, 126, 234, 0.08)',
+                                                                        borderRadius: '4px',
+                                                                        borderLeft: '3px solid #667eea',
+                                                                        maxWidth: '300px'
+                                                                    }}>
+                                                                        <strong style={{ fontSize: '11px', opacity: 0.7, display: 'block', marginBottom: '4px' }}>📝 Reporte:</strong>
+                                                                        {log.report_text}
+                                                                    </div>
+                                                                )}
+                                                                {log.photo_path && <a href={`${import.meta.env.VITE_SERVER_URL}${log.photo_path}`} target="_blank" rel="noopener noreferrer">📷 Ver foto</a>}
+                                                                {!log.report_text && !log.photo_path && <span style={{ opacity: 0.5 }}>-</span>}
                                                             </td>
                                                         </tr>
                                                     ))}
