@@ -15,12 +15,32 @@ function Login() {
         try {
             const res = await axios.post(`${import.meta.env.VITE_SERVER_URL}/api/login`, { username, password });
             localStorage.setItem('user', JSON.stringify(res.data));
+            if (res.data.role === 'admin') {
+                navigate('/manager');
+            } else {
+                navigate('/worker');
+            }
+        } catch (err) {
+            console.error('Login error:', err);
+            const errorMessage = err.response?.data?.error || err.message;
+            if (err.message === 'Network Error') {
+                alert(`❌ Error de conexión con el servidor.\n\nPosibles causas:\n1. El servidor en Render se está despertando (espera 1 minuto).\n2. Bloqueo de CORS.\n3. URL incorrecta: ${import.meta.env.VITE_SERVER_URL}\n\nAbre la consola del navegador (F12) para más detalles.`);
+            } else {
+                alert('Login failed: ' + errorMessage);
+            }
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div style={{
+            minHeight: '100vh',
             display: 'flex',
-                alignItems: 'center',
-                    justifyContent: 'center',
-                        justifyContent: 'center',
-                            background: 'var(--bg-main)',
-                                padding: '20px'
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'var(--bg-main)',
+            padding: '20px'
         }}>
             <div className="card fade-in" style={{
                 maxWidth: '420px',
@@ -83,8 +103,6 @@ function Login() {
                 <div style={{
                     marginTop: '24px',
                     padding: '16px',
-                    marginTop: '24px',
-                    padding: '16px',
                     background: 'rgba(0, 0, 0, 0.05)',
                     borderRadius: '8px',
                     fontSize: '13px',
@@ -95,7 +113,7 @@ function Login() {
                     <p>👷 Worker: <strong>worker</strong> / <strong>worker123</strong></p>
                 </div>
             </div>
-        </div >
+        </div>
     );
 }
 
