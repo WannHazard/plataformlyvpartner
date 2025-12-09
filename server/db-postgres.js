@@ -3,13 +3,33 @@ const bcrypt = require('bcrypt');
 require('dotenv').config();
 
 // Create connection pool
-// Try using DATABASE_URL first (for production), fallback to individual params (for local)
-const poolConfig = process.env.DATABASE_URL
+const isProduction = process.env.NODE_ENV === 'production';
+const connectionString = process.env.DATABASE_URL;
+
+// SSL Configuration:
+// Render Internal connections (default) do NOT support SSL.
+// Render External connections REQUIRE SSL.
+// specific control via DB_SSL env var ('true' or 'false').
+// Default: false (safe for internal).
+let sslConfig = false;
+if (process.env.DB_SSL === 'true') {
+  sslConfig = { rejectUnauthorized: false };
+} else if (process.env.DB_SSL === 'false') {
+  sslConfig = false;
+} else if (isProduction && connectionString && !connectionString.includes('render.com')) {
+  // Legacy fallback: if production and NOT clearly a render internal host (heuristic), maybe default true? 
+  // But for now, let's Stick to explicit enable or default false for Render compatibility.
+  sslConfig = false;
+}
+
+console.log(`[DB Config] NODE_ENV: ${process.env.NODE_ENV}`);
+console.log(`[DB Config] Using connection string: ${connectionString ? 'Yes (Masked)' : 'No'}`);
+console.log(`[DB Config] SSL Enabled: ${JSON.stringify(sslConfig)}`);
+
+const poolConfig = connectionString
   ? {
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production'
-      ? { rejectUnauthorized: false }
-      : false,
+    connectionString,
+    ssl: sslConfig,
     connectionTimeoutMillis: 30000,
     idleTimeoutMillis: 30000,
     max: 10
@@ -20,7 +40,7 @@ const poolConfig = process.env.DATABASE_URL
     database: process.env.DB_NAME || 'dbolsqtjszs2bl',
     user: process.env.DB_USER || 'usr1wx4ig8ekg',
     password: process.env.DB_PASSWORD || 'z#>B(#d12^d{',
-    ssl: { rejectUnauthorized: false },
+    ssl: { rejectUnauthorized: false }, // Use SSL for the hardcoded fallback (likely external GC SQL?)
     connectionTimeoutMillis: 30000,
     idleTimeoutMillis: 30000,
     max: 10
