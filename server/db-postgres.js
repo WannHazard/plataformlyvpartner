@@ -1,34 +1,46 @@
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
+const url = require('url');
 require('dotenv').config();
 
 // Configuration builder
 const buildConfig = (sslConfig) => {
   const isProduction = process.env.NODE_ENV === 'production';
-  const connectionString = process.env.DATABASE_URL;
+  const dbUrl = process.env.DATABASE_URL;
 
-  if (connectionString) {
-    return {
-      connectionString,
-      ssl: sslConfig,
-      connectionTimeoutMillis: 5000, // Short timeout for testing connection
-      idleTimeoutMillis: 30000,
-      max: 10
-    };
+  let config = {
+    connectionTimeoutMillis: 5000,
+    idleTimeoutMillis: 30000,
+    max: 10,
+    ssl: sslConfig
+  };
+
+  if (dbUrl) {
+    try {
+      const parsedUrl = new url.URL(dbUrl);
+      config.user = parsedUrl.username;
+      config.password = parsedUrl.password;
+      config.host = parsedUrl.hostname;
+      config.port = parsedUrl.port || 5432;
+      config.database = parsedUrl.pathname.split('/')[1]; // remove leading slash
+
+      console.log(`[DB Config] Parsed Host: ${config.host}`);
+      console.log(`[DB Config] Parsed Port: ${config.port}`);
+      console.log(`[DB Config] Parsed DB: ${config.database}`);
+    } catch (e) {
+      console.error('[DB Config] Error parsing DATABASE_URL:', e);
+      // Fallback if parsing fails (shouldn't happen with valid URL)
+    }
+  } else {
+    // Local / Manual fallback path
+    config.host = process.env.DB_HOST || '35.214.221.252';
+    config.port = parseInt(process.env.DB_PORT) || 443;
+    config.database = process.env.DB_NAME || 'dbolsqtjszs2bl';
+    config.user = process.env.DB_USER || 'usr1wx4ig8ekg';
+    config.password = process.env.DB_PASSWORD || 'z#>B(#d12^d{';
   }
 
-  // Fallback / Local
-  return {
-    host: process.env.DB_HOST || '35.214.221.252',
-    port: parseInt(process.env.DB_PORT) || 443,
-    database: process.env.DB_NAME || 'dbolsqtjszs2bl',
-    user: process.env.DB_USER || 'usr1wx4ig8ekg',
-    password: process.env.DB_PASSWORD || 'z#>B(#d12^d{',
-    ssl: { rejectUnauthorized: false }, // Keep explicit SSL for the fallback external host
-    connectionTimeoutMillis: 30000,
-    idleTimeoutMillis: 30000,
-    max: 10
-  };
+  return config;
 };
 
 // Global active pool reference
@@ -36,7 +48,7 @@ let activePool = null;
 
 // Helper to test a connection configuration
 async function tryConnect(config, description) {
-  console.log(`[DB Init] Attempting connection via ${description}...`);
+  console.log(`[DB Init] Attempting connection via ${description} to ${config.host}:${config.port}...`);
   const pool = new Pool(config);
   try {
     const client = await pool.connect();
@@ -55,20 +67,13 @@ async function initializePool() {
   if (activePool) return activePool;
 
   // Strategy 1: Try NO SSL (Standard for Render Internal)
-  // Only if DATABASE_URL is present (if using fallback local params, we stick to that specific config)
-  if (process.env.DATABASE_URL) {
-    const noSSLConfig = buildConfig(false);
-    activePool = await tryConnect(noSSLConfig, 'No SSL (Render Internal)');
+  const noSSLConfig = buildConfig(false);
+  activePool = await tryConnect(noSSLConfig, 'No SSL');
 
-    // Strategy 2: If failed, Try with SSL (Standard for Render External / Remote)
-    if (!activePool) {
-      const sslConfig = buildConfig({ rejectUnauthorized: false });
-      activePool = await tryConnect(sslConfig, 'SSL (Render External)');
-    }
-  } else {
-    // Local / Manual fallback path
-    const fallbackConfig = buildConfig({ rejectUnauthorized: false });
-    activePool = await tryConnect(fallbackConfig, 'Manual/Fallback Config');
+  // Strategy 2: If failed, Try with SSL (Standard for Render External / Remote)
+  if (!activePool) {
+    const sslConfig = buildConfig({ rejectUnauthorized: false });
+    activePool = await tryConnect(sslConfig, 'SSL');
   }
 
   if (!activePool) {
