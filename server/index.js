@@ -1,10 +1,11 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const db = require('./db');
+const pool = require('./db-postgres');
 const bcrypt = require('bcrypt');
 const multer = require('multer');
 const fs = require('fs');
+require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -19,11 +20,10 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: function (origin, callback) {
-    console.log('Request Origin:', origin); // Debug log
-    // allow requests with no origin (like mobile apps or curl requests)
+    console.log('Request Origin:', origin);
     if (!origin) return callback(null, true);
     if (allowedOrigins.indexOf(origin) === -1) {
-      console.error('CORS blocked origin:', origin); // Debug log
+      console.error('CORS blocked origin:', origin);
       return callback(new Error('The CORS policy for this site does not allow access from the specified Origin.'));
     }
     return callback(null, true);
@@ -41,13 +41,11 @@ app.get('/', (req, res) => {
 app.post('/api/seed-admin', async (req, res) => {
   try {
     const hashedPassword = await bcrypt.hash('admin123', 10);
-    db.run("INSERT OR REPLACE INTO users (id, username, password, role) VALUES (?, ?, ?, ?)",
-      [1, 'admin', hashedPassword, 'admin'],
-      function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: 'Admin user created successfully', userId: this.lastID });
-      }
+    const result = await pool.query(
+      "INSERT INTO users (username, password, role) VALUES ($1, $2, $3) ON CONFLICT (username) DO UPDATE SET password = $2 RETURNING id",
+      ['admin', hashedPassword, 'admin']
     );
+    res.json({ message: 'Admin user created successfully', userId: result.rows[0].id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -75,39 +73,55 @@ const upload = multer({ storage: storage });
 // --- ROUTES ---
 
 // Login
-app.post('/api/login', (req, res) => {
-  const { username, password } = req.body;
-  db.get('SELECT * FROM users WHERE username = ?', [username], async (err, user) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (!user) return res.status(401).json({ error: 'User not found' });
+app.post('/api/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
 
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    const user = result.rows[0];
     const match = await bcrypt.compare(password, user.password);
+
     if (match) {
       res.json({ id: user.id, username: user.username, role: user.role });
     } else {
       res.status(401).json({ error: 'Invalid password' });
     }
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Register (Helper for initial setup, usually admin only)
 app.post('/api/register', async (req, res) => {
-  const { username, password, role } = req.body;
-  const hashedPassword = await bcrypt.hash(password, 10);
-  db.run('INSERT INTO users (username, password, role) VALUES (?, ?, ?)', [username, hashedPassword, role], function (err) {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json({ id: this.lastID });
-  });
+  try {
+    const { username, password, role } = req.body;
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const result = await pool.query(
+      'INSERT INTO users (username, password, role) VALUES ($1, $2, $3) RETURNING id',
+      [username, hashedPassword, role]
+    );
+    res.json({ id: result.rows[0].id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Clock In
-app.post('/api/clock-in', (req, res) => {
-  const { userId, lat, lon } = req.body;
+app.post('/api/clock-in', async (req, res) => {
+  try {
+    const { userId, lat, lon } = req.body;
 
-  // Verificar que el usuario tenga una asignación activa
-  db.get('SELECT * FROM worker_assignments WHERE user_id = ? AND status = ?', [userId, 'active'], (err, assignment) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (!assignment) {
+    // Verificar que el usuario tenga una asignación activa
+    const assignmentResult = await pool.query(
+      'SELECT * FROM worker_assignments WHERE user_id = $1 AND status = $2',
+      [userId, 'active']
+    );
+
+    if (assignmentResult.rows.length === 0) {
       return res.status(403).json({
         error: 'No hay asignación activa',
         message: 'Debes estar asignado a un lugar de trabajo para marcar entrada'
@@ -115,24 +129,29 @@ app.post('/api/clock-in', (req, res) => {
     }
 
     const now = new Date().toISOString();
-    db.run('INSERT INTO time_logs (user_id, clock_in_time, clock_in_lat, clock_in_lon) VALUES (?, ?, ?, ?)',
-      [userId, now, lat, lon],
-      function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ id: this.lastID, message: 'Clocked in successfully' });
-      }
+    const result = await pool.query(
+      'INSERT INTO time_logs (user_id, clock_in_time, clock_in_lat, clock_in_lon) VALUES ($1, $2, $3, $4) RETURNING id',
+      [userId, now, lat, lon]
     );
-  });
+
+    res.json({ id: result.rows[0].id, message: 'Clocked in successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Clock Out
-app.post('/api/clock-out', (req, res) => {
-  const { userId, lat, lon } = req.body;
+app.post('/api/clock-out', async (req, res) => {
+  try {
+    const { userId, lat, lon } = req.body;
 
-  // Verificar que el usuario tenga una asignación activa
-  db.get('SELECT * FROM worker_assignments WHERE user_id = ? AND status = ?', [userId, 'active'], (err, assignment) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (!assignment) {
+    // Verificar que el usuario tenga una asignación activa
+    const assignmentResult = await pool.query(
+      'SELECT * FROM worker_assignments WHERE user_id = $1 AND status = $2',
+      [userId, 'active']
+    );
+
+    if (assignmentResult.rows.length === 0) {
       return res.status(403).json({
         error: 'No hay asignación activa',
         message: 'Debes estar asignado a un lugar de trabajo para marcar salida'
@@ -140,258 +159,280 @@ app.post('/api/clock-out', (req, res) => {
     }
 
     const now = new Date().toISOString();
-    // Find the last active log for this user (where clock_out_time is null)
-    db.get('SELECT id FROM time_logs WHERE user_id = ? AND clock_out_time IS NULL ORDER BY id DESC LIMIT 1', [userId], (err, row) => {
-      if (err) return res.status(500).json({ error: err.message });
-      if (!row) return res.status(400).json({ error: 'No active clock-in found' });
 
-      db.run('UPDATE time_logs SET clock_out_time = ?, clock_out_lat = ?, clock_out_lon = ? WHERE id = ?',
-        [now, lat, lon, row.id],
-        function (err) {
-          if (err) return res.status(500).json({ error: err.message });
-          res.json({ message: 'Clocked out successfully' });
-        }
-      );
-    });
-  });
+    // Find the last active log for this user (where clock_out_time is null)
+    const logResult = await pool.query(
+      'SELECT id FROM time_logs WHERE user_id = $1 AND clock_out_time IS NULL ORDER BY id DESC LIMIT 1',
+      [userId]
+    );
+
+    if (logResult.rows.length === 0) {
+      return res.status(400).json({ error: 'No active clock-in found' });
+    }
+
+    await pool.query(
+      'UPDATE time_logs SET clock_out_time = $1, clock_out_lat = $2, clock_out_lon = $3 WHERE id = $4',
+      [now, lat, lon, logResult.rows[0].id]
+    );
+
+    res.json({ message: 'Clocked out successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Upload Report (Photo + Text)
-app.post('/api/report', upload.single('photo'), (req, res) => {
-  const { userId, text } = req.body;
-  const photoPath = req.file ? `/uploads/${req.file.filename}` : null;
+app.post('/api/report', upload.single('photo'), async (req, res) => {
+  try {
+    const { userId, text } = req.body;
+    const photoPath = req.file ? `/uploads/${req.file.filename}` : null;
 
-  // We attach the report to the current active session OR just the last session. 
-  // Let's assume we update the last session or create a standalone report?
-  // Requirement says "opcion de subir foto y hacer informe".
-  // Let's update the latest log entry for simplicity, or we could have a separate reports table.
-  // Given the schema in db.js has report_text and photo_path in time_logs, we'll update the latest log.
-
-  db.get('SELECT id FROM time_logs WHERE user_id = ? ORDER BY id DESC LIMIT 1', [userId], (err, row) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (!row) return res.status(400).json({ error: 'No time log found to attach report' });
-
-    db.run('UPDATE time_logs SET report_text = ?, photo_path = ? WHERE id = ?',
-      [text, photoPath, row.id],
-      function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: 'Report submitted successfully', photoPath });
-      }
+    const logResult = await pool.query(
+      'SELECT id FROM time_logs WHERE user_id = $1 ORDER BY id DESC LIMIT 1',
+      [userId]
     );
-  });
+
+    if (logResult.rows.length === 0) {
+      return res.status(400).json({ error: 'No time log found to attach report' });
+    }
+
+    await pool.query(
+      'UPDATE time_logs SET report_text = $1, photo_path = $2 WHERE id = $3',
+      [text, photoPath, logResult.rows[0].id]
+    );
+
+    res.json({ message: 'Report submitted successfully', photoPath });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Get Logs (For Manager)
-app.get('/api/logs', (req, res) => {
-  db.all(`
-    SELECT t.*, u.username 
-    FROM time_logs t 
-    JOIN users u ON t.user_id = u.id 
-    ORDER BY t.clock_in_time DESC`,
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json(rows);
-    }
-  );
+app.get('/api/logs', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT t.*, u.username 
+      FROM time_logs t 
+      JOIN users u ON t.user_id = u.id 
+      ORDER BY t.clock_in_time DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Get Locations
-app.get('/api/locations', (req, res) => {
-  db.all('SELECT * FROM locations', (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
+app.get('/api/locations', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM locations');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Add Location
-app.post('/api/locations', (req, res) => {
-  const { name, lat, lon, radius } = req.body;
-  db.run('INSERT INTO locations (name, latitude, longitude, radius) VALUES (?, ?, ?, ?)',
-    [name, lat, lon, radius],
-    function (err) {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ id: this.lastID });
-    }
-  );
+app.post('/api/locations', async (req, res) => {
+  try {
+    const { name, lat, lon, radius } = req.body;
+    const result = await pool.query(
+      'INSERT INTO locations (name, latitude, longitude, radius) VALUES ($1, $2, $3, $4) RETURNING id',
+      [name, lat, lon, radius]
+    );
+    res.json({ id: result.rows[0].id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Delete Location
-app.delete('/api/locations/:id', (req, res) => {
-  const { id } = req.params;
-  db.run('DELETE FROM locations WHERE id = ?', [id], function (err) {
-    if (err) return res.status(500).json({ error: err.message });
+app.delete('/api/locations/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM locations WHERE id = $1', [id]);
     res.json({ message: 'Ubicación eliminada exitosamente' });
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- User Management Routes ---
 
 // Get all users
-app.get('/api/users', (req, res) => {
-  db.all('SELECT id, username, role FROM users', (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
+app.get('/api/users', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, username, role FROM users');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Create user
 app.post('/api/users', async (req, res) => {
-  const { username, password, role } = req.body;
   try {
+    const { username, password, role } = req.body;
     const hashedPassword = await bcrypt.hash(password, 10);
-    db.run('INSERT INTO users (username, password, role) VALUES (?, ?, ?)',
-      [username, hashedPassword, role],
-      function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ id: this.lastID, username, role });
-      }
+    const result = await pool.query(
+      'INSERT INTO users (username, password, role) VALUES ($1, $2, $3) RETURNING id',
+      [username, hashedPassword, role]
     );
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ id: result.rows[0].id, username, role });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
 // Update user
 app.put('/api/users/:id', async (req, res) => {
-  const { username, password, role } = req.body;
-  const { id } = req.params;
-
   try {
+    const { username, password, role } = req.body;
+    const { id } = req.params;
+
     if (password) {
       const hashedPassword = await bcrypt.hash(password, 10);
-      db.run('UPDATE users SET username = ?, password = ?, role = ? WHERE id = ?',
-        [username, hashedPassword, role, id],
-        function (err) {
-          if (err) return res.status(500).json({ error: err.message });
-          res.json({ message: 'User updated successfully' });
-        }
+      await pool.query(
+        'UPDATE users SET username = $1, password = $2, role = $3 WHERE id = $4',
+        [username, hashedPassword, role, id]
       );
     } else {
-      db.run('UPDATE users SET username = ?, role = ? WHERE id = ?',
-        [username, role, id],
-        function (err) {
-          if (err) return res.status(500).json({ error: err.message });
-          res.json({ message: 'User updated successfully' });
-        }
+      await pool.query(
+        'UPDATE users SET username = $1, role = $2 WHERE id = $3',
+        [username, role, id]
       );
     }
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ message: 'User updated successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
 // Delete user
-app.delete('/api/users/:id', (req, res) => {
-  const { id } = req.params;
-  db.run('DELETE FROM users WHERE id = ?', [id], function (err) {
-    if (err) return res.status(500).json({ error: err.message });
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM users WHERE id = $1', [id]);
     res.json({ message: 'User deleted successfully' });
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- Worker Assignments Routes ---
 
 // Get all assignments
-app.get('/api/assignments', (req, res) => {
-  db.all(`
-    SELECT a.*, u.username, l.name as location_name 
-    FROM worker_assignments a
-    JOIN users u ON a.user_id = u.id
-    JOIN locations l ON a.location_id = l.id
-    ORDER BY a.status DESC, a.assigned_date DESC
-  `, (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
+app.get('/api/assignments', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT a.*, u.username, l.name as location_name 
+      FROM worker_assignments a
+      JOIN users u ON a.user_id = u.id
+      JOIN locations l ON a.location_id = l.id
+      ORDER BY a.status DESC, a.assigned_date DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Assign worker to location
-app.post('/api/assignments', (req, res) => {
-  const { userId, locationId } = req.body;
-  db.run('INSERT INTO worker_assignments (user_id, location_id) VALUES (?, ?)',
-    [userId, locationId],
-    function (err) {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ id: this.lastID, message: 'Worker assigned successfully' });
-    }
-  );
+app.post('/api/assignments', async (req, res) => {
+  try {
+    const { userId, locationId } = req.body;
+    const result = await pool.query(
+      'INSERT INTO worker_assignments (user_id, location_id) VALUES ($1, $2) RETURNING id',
+      [userId, locationId]
+    );
+    res.json({ id: result.rows[0].id, message: 'Worker assigned successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Delete assignment
-app.delete('/api/assignments/:id', (req, res) => {
-  const { id } = req.params;
-  db.run('DELETE FROM worker_assignments WHERE id = ?', [id], function (err) {
-    if (err) return res.status(500).json({ error: err.message });
+app.delete('/api/assignments/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM worker_assignments WHERE id = $1', [id]);
     res.json({ message: 'Assignment deleted successfully' });
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Update assignment status
-app.patch('/api/assignments/:id/status', (req, res) => {
-  const { id } = req.params;
-  const { status } = req.body;
+app.patch('/api/assignments/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
 
-  if (!['active', 'finished'].includes(status)) {
-    return res.status(400).json({ error: 'Invalid status. Must be "active" or "finished"' });
-  }
+    if (!['active', 'finished'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status. Must be "active" or "finished"' });
+    }
 
-  db.run('UPDATE worker_assignments SET status = ? WHERE id = ?', [status, id], function (err) {
-    if (err) return res.status(500).json({ error: err.message });
+    await pool.query('UPDATE worker_assignments SET status = $1 WHERE id = $2', [status, id]);
     res.json({ message: 'Assignment status updated successfully' });
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Get worker profile with monthly hours
-app.get('/api/workers/:id/profile', (req, res) => {
-  const { id } = req.params;
-  const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+app.get('/api/workers/:id/profile', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
 
-  db.get('SELECT id, username, role FROM users WHERE id = ?', [id], (err, user) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    const userResult = await pool.query('SELECT id, username, role FROM users WHERE id = $1', [id]);
 
-    // Get monthly hours
-    db.all(`
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = userResult.rows[0];
+
+    // Get monthly hours - PostgreSQL version
+    const logsResult = await pool.query(`
       SELECT * FROM time_logs 
-      WHERE user_id = ? 
-      AND strftime('%Y-%m', clock_in_time) = ?
+      WHERE user_id = $1 
+      AND TO_CHAR(clock_in_time, 'YYYY-MM') = $2
       ORDER BY clock_in_time DESC
-    `, [id, currentMonth], (err, logs) => {
-      if (err) return res.status(500).json({ error: err.message });
+    `, [id, currentMonth]);
 
-      // Calculate total hours
-      let totalMinutes = 0;
-      logs.forEach(log => {
-        if (log.clock_in_time && log.clock_out_time) {
-          const start = new Date(log.clock_in_time);
-          const end = new Date(log.clock_out_time);
-          totalMinutes += (end - start) / 60000;
-        }
-      });
-
-      const totalHours = Math.floor(totalMinutes / 60);
-      const remainingMinutes = Math.floor(totalMinutes % 60);
-
-      // Get assignments
-      db.all(`
-        SELECT l.name as location_name, a.assigned_date, a.status
-        FROM worker_assignments a
-        JOIN locations l ON a.location_id = l.id
-        WHERE a.user_id = ?
-        ORDER BY a.status ASC, a.assigned_date DESC
-      `, [id], (err, assignments) => {
-        if (err) return res.status(500).json({ error: err.message });
-
-        res.json({
-          ...user,
-          monthlyHours: `${totalHours}h ${remainingMinutes}m`,
-          totalMinutes,
-          logs,
-          assignments
-        });
-      });
+    // Calculate total hours
+    let totalMinutes = 0;
+    logsResult.rows.forEach(log => {
+      if (log.clock_in_time && log.clock_out_time) {
+        const start = new Date(log.clock_in_time);
+        const end = new Date(log.clock_out_time);
+        totalMinutes += (end - start) / 60000;
+      }
     });
-  });
+
+    const totalHours = Math.floor(totalMinutes / 60);
+    const remainingMinutes = Math.floor(totalMinutes % 60);
+
+    // Get assignments
+    const assignmentsResult = await pool.query(`
+      SELECT l.name as location_name, a.assigned_date, a.status
+      FROM worker_assignments a
+      JOIN locations l ON a.location_id = l.id
+      WHERE a.user_id = $1
+      ORDER BY a.status ASC, a.assigned_date DESC
+    `, [id]);
+
+    res.json({
+      ...user,
+      monthlyHours: `${totalHours}h ${remainingMinutes}m`,
+      totalMinutes,
+      logs: logsResult.rows,
+      assignments: assignmentsResult.rows
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Start server
