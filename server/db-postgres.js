@@ -2,64 +2,95 @@ const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 require('dotenv').config();
 
-// Create connection pool
-const isProduction = process.env.NODE_ENV === 'production';
-const connectionString = process.env.DATABASE_URL;
+// Configuration builder
+const buildConfig = (sslConfig) => {
+  const isProduction = process.env.NODE_ENV === 'production';
+  const connectionString = process.env.DATABASE_URL;
 
-// SSL Configuration:
-// Render Internal connections (default) do NOT support SSL.
-// Render External connections REQUIRE SSL.
-// specific control via DB_SSL env var ('true' or 'false').
-// Default: false (safe for internal).
-let sslConfig = false;
-if (process.env.DB_SSL === 'true') {
-  sslConfig = { rejectUnauthorized: false };
-} else if (process.env.DB_SSL === 'false') {
-  sslConfig = false;
-} else if (isProduction && connectionString && !connectionString.includes('render.com')) {
-  // Legacy fallback: if production and NOT clearly a render internal host (heuristic), maybe default true? 
-  // But for now, let's Stick to explicit enable or default false for Render compatibility.
-  sslConfig = false;
-}
-
-console.log(`[DB Config] NODE_ENV: ${process.env.NODE_ENV}`);
-console.log(`[DB Config] Using connection string: ${connectionString ? 'Yes (Masked)' : 'No'}`);
-console.log(`[DB Config] SSL Enabled: ${JSON.stringify(sslConfig)}`);
-
-const poolConfig = connectionString
-  ? {
-    connectionString,
-    ssl: sslConfig,
-    connectionTimeoutMillis: 30000,
-    idleTimeoutMillis: 30000,
-    max: 10
+  if (connectionString) {
+    return {
+      connectionString,
+      ssl: sslConfig,
+      connectionTimeoutMillis: 5000, // Short timeout for testing connection
+      idleTimeoutMillis: 30000,
+      max: 10
+    };
   }
-  : {
+
+  // Fallback / Local
+  return {
     host: process.env.DB_HOST || '35.214.221.252',
     port: parseInt(process.env.DB_PORT) || 443,
     database: process.env.DB_NAME || 'dbolsqtjszs2bl',
     user: process.env.DB_USER || 'usr1wx4ig8ekg',
     password: process.env.DB_PASSWORD || 'z#>B(#d12^d{',
-    ssl: { rejectUnauthorized: false }, // Use SSL for the hardcoded fallback (likely external GC SQL?)
+    ssl: { rejectUnauthorized: false }, // Keep explicit SSL for the fallback external host
     connectionTimeoutMillis: 30000,
     idleTimeoutMillis: 30000,
     max: 10
   };
+};
 
-const pool = new Pool(poolConfig);
+// Global active pool reference
+let activePool = null;
 
-// Test connection
-pool.on('connect', () => {
-  console.log('Connected to PostgreSQL database');
-});
+// Helper to test a connection configuration
+async function tryConnect(config, description) {
+  console.log(`[DB Init] Attempting connection via ${description}...`);
+  const pool = new Pool(config);
+  try {
+    const client = await pool.connect();
+    console.log(`[DB Init] Connection SUCCESS via ${description}`);
+    client.release();
+    return pool;
+  } catch (err) {
+    console.warn(`[DB Init] Connection FAILED via ${description}: ${err.message}`);
+    await pool.end(); // Clean up failed pool
+    return null;
+  }
+}
 
-pool.on('error', (err) => {
-  console.error('Unexpected error on idle client', err);
-  process.exit(-1);
-});
+// Initialization Logic
+async function initializePool() {
+  if (activePool) return activePool;
+
+  // Strategy 1: Try NO SSL (Standard for Render Internal)
+  // Only if DATABASE_URL is present (if using fallback local params, we stick to that specific config)
+  if (process.env.DATABASE_URL) {
+    const noSSLConfig = buildConfig(false);
+    activePool = await tryConnect(noSSLConfig, 'No SSL (Render Internal)');
+
+    // Strategy 2: If failed, Try with SSL (Standard for Render External / Remote)
+    if (!activePool) {
+      const sslConfig = buildConfig({ rejectUnauthorized: false });
+      activePool = await tryConnect(sslConfig, 'SSL (Render External)');
+    }
+  } else {
+    // Local / Manual fallback path
+    const fallbackConfig = buildConfig({ rejectUnauthorized: false });
+    activePool = await tryConnect(fallbackConfig, 'Manual/Fallback Config');
+  }
+
+  if (!activePool) {
+    console.error('[DB Init] CRITICAL: Could not establish database connection with any configuration.');
+    process.exit(1);
+  }
+
+  // Set up error handler on the winning pool
+  activePool.on('error', (err) => {
+    console.error('Unexpected error on idle client', err);
+    process.exit(-1);
+  });
+
+  // Run Schema Init
+  await initDb(activePool);
+
+  return activePool;
+}
 
 // Initialize database tables and seed data
-async function initDb() {
+async function initDb(pool) {
+  console.log('[DB Init] Initializing Schema...');
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -151,10 +182,22 @@ async function initDb() {
   }
 }
 
-// Initialize on module load
-initDb().catch(err => {
-  console.error('Failed to initialize database:', err);
+// Start initialization immediately
+const poolPromise = initializePool().catch(err => {
+  console.error('Failed to initialize pool:', err);
   process.exit(1);
 });
 
-module.exports = pool;
+// Export a proxy that delegates to the active pool
+// This ensures that 'require' returns an object immediately,
+// but methods wait for initialization.
+module.exports = {
+  query: async (text, params) => {
+    const pool = await poolPromise;
+    return pool.query(text, params);
+  },
+  connect: async () => {
+    const pool = await poolPromise;
+    return pool.connect();
+  }
+};
