@@ -2,21 +2,31 @@ const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 require('dotenv').config();
 
-// Create connection pool using individual parameters to avoid URL encoding issues
-const pool = new Pool({
-  host: process.env.DB_HOST || '35.214.221.252',
-  port: process.env.DB_PORT || 443,
-  database: process.env.DB_NAME || 'dbolsqtjszs2bl',
-  user: process.env.DB_USER || 'usr1wx4ig8ekg',
-  password: process.env.DB_PASSWORD || 'z#>B(#d12^d{',
-  ssl: {
-    rejectUnauthorized: false  // Required for cloud PostgreSQL providers
-  },
-  // Additional connection options
-  connectionTimeoutMillis: 10000,
-  idleTimeoutMillis: 30000,
-  max: 10
-});
+// Create connection pool
+// Try using DATABASE_URL first (for production), fallback to individual params (for local)
+const poolConfig = process.env.DATABASE_URL
+  ? {
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.NODE_ENV === 'production'
+      ? { rejectUnauthorized: false }
+      : false,
+    connectionTimeoutMillis: 30000,
+    idleTimeoutMillis: 30000,
+    max: 10
+  }
+  : {
+    host: process.env.DB_HOST || '35.214.221.252',
+    port: parseInt(process.env.DB_PORT) || 443,
+    database: process.env.DB_NAME || 'dbolsqtjszs2bl',
+    user: process.env.DB_USER || 'usr1wx4ig8ekg',
+    password: process.env.DB_PASSWORD || 'z#>B(#d12^d{',
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 30000,
+    idleTimeoutMillis: 30000,
+    max: 10
+  };
+
+const pool = new Pool(poolConfig);
 
 // Test connection
 pool.on('connect', () => {
