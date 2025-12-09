@@ -76,6 +76,20 @@ async function initializePool() {
     activePool = await tryConnect(sslConfig, 'SSL');
   }
 
+  // Strategy 3: PORT AUTO-CORRECTION (Try Port 5432 if not already used)
+  // The logs showed the app connecting to port 443, which is wrong.
+  if (!activePool && noSSLConfig.port !== 5432) {
+    console.log('[DB Init] Configured port failed. Attempting Port 5432 Override...');
+
+    const noSSLConfig5432 = { ...noSSLConfig, port: 5432 };
+    activePool = await tryConnect(noSSLConfig5432, 'No SSL (Port 5432 Override)');
+
+    if (!activePool) {
+      const sslConfig5432 = { ...buildConfig({ rejectUnauthorized: false }), port: 5432 };
+      activePool = await tryConnect(sslConfig5432, 'SSL (Port 5432 Override)');
+    }
+  }
+
   if (!activePool) {
     console.error('[DB Init] CRITICAL: Could not establish database connection with any configuration.');
     process.exit(1);
